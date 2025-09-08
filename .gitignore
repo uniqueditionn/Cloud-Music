@@ -6,26 +6,18 @@ __pycache__/
 *.db
 *.sqlite3
 
-# Virtual environments
+# Virtualenv
 .venv/
 env/
 venv/
 
-# OS files
+# Logs
+*.log
+
+# System
 .DS_Store
 Thumbs.db
 
-# Downloads
-downloads/
-*.mp3
-*.mp4
-*.webm
-*.m4a
-*.jpg
-*.png
-
-# yt-dlp cookies (created dynamically from ENV)
+# Secrets
 cookies.txt
-
-# Logs
-*.log
+.env

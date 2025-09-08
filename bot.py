@@ -1,176 +1,200 @@
 import os
 import logging
-import shutil
 from datetime import datetime
-import yt_dlp
 
+import yt_dlp
 from fastapi import FastAPI, Request
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+    Update,
+    InputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
 )
 from telegram.constants import ChatAction
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
 
-# ----------------- CONFIG -----------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Example: https://your-app.onrender.com/webhook
-COOKIES_ENV = os.getenv("YT_COOKIES_FILES")  # Your cookies stored in ENV
-COOKIES_FILE = "cookies.txt"
+# ---------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# Write cookies.txt from ENV if available
+# ---------------------------------------------------------
+# Environment variables
+# ---------------------------------------------------------
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
+COOKIES_ENV = os.getenv("YT_COOKIES_FILES")
+
+# Write cookies.txt if provided in environment
+COOKIES_FILE = "cookies.txt"
 if COOKIES_ENV:
     with open(COOKIES_FILE, "w", encoding="utf-8") as f:
         f.write(COOKIES_ENV)
 
-# Create downloads folder
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-# ----------------- LOGGING -----------------
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ----------------- FASTAPI -----------------
+# ---------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------
 app = FastAPI()
+
+# ---------------------------------------------------------
+# Telegram application
+# ---------------------------------------------------------
 application = Application.builder().token(BOT_TOKEN).build()
 
 # Track user choices
-user_preferences = {}
-monthly_users = set()
+user_choices = {}
 
-# ----------------- HELPERS -----------------
-def get_greeting(username: str, first_name: str) -> str:
-    hour = (datetime.utcnow().hour + 5) % 24  # adjust for IST offset
-    if hour < 12:
-        greet = "Good Morning"
-    elif hour < 17:
-        greet = "Good Afternoon"
-    elif hour < 21:
-        greet = "Good Evening"
+
+# ---------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------
+def get_greeting(username: str) -> str:
+    """Return time-based greeting with username"""
+    hour = datetime.utcnow().hour + 5.5  # IST (UTC+5:30)
+    hour = int(hour % 24)
+
+    if 5 <= hour < 12:
+        greeting = "🌅 Good Morning"
+    elif 12 <= hour < 17:
+        greeting = "🌞 Good Afternoon"
+    elif 17 <= hour < 21:
+        greeting = "🌇 Good Evening"
     else:
-        greet = "Good Night"
-    
-    name = f"@{username}" if username else first_name
-    return f"{greet}, {name} 👋"
+        greeting = "🌙 Good Night"
 
-async def send_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    return f"{greeting}, @{username}!"
 
-def download_media(query: str, download_audio=True, download_video=False):
-    ydl_opts = {
-        "format": "bestaudio/best" if download_audio else "best",
-        "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
-        "quiet": True,
-        "noplaylist": True,
-        "writesubtitles": False,
-        "writethumbnail": True,
-        "cookiefile": COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
-        "postprocessors": []
-    }
 
-    if download_audio:
-        ydl_opts["postprocessors"].append({
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        })
-        ydl_opts["postprocessors"].append({"key": "EmbedThumbnail"})
+async def send_typing(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """Send typing action"""
+    await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-        entry = info["entries"][0]
-        file_path = ydl.prepare_filename(entry)
-        if download_audio:
-            file_path = file_path.rsplit(".", 1)[0] + ".mp3"
-        return file_path, entry["title"]
 
-def cleanup_downloads():
-    """Remove all files from downloads folder."""
-    try:
-        shutil.rmtree(DOWNLOAD_DIR)
-        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    except Exception as e:
-        logger.error(f"Cleanup failed: {e}")
-
-# ----------------- HANDLERS -----------------
+# ---------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    greeting = get_greeting(user.username, user.first_name)
-    monthly_users.add(user.id)
+    username = update.effective_user.username or update.effective_user.first_name
+    greeting = get_greeting(username)
 
     keyboard = [
-        [InlineKeyboardButton("🎵 Music", callback_data="music")],
-        [InlineKeyboardButton("🎬 Video", callback_data="video")],
-        [InlineKeyboardButton("🎶 Both", callback_data="both")]
+        [
+            InlineKeyboardButton("🎵 Music", callback_data="music"),
+            InlineKeyboardButton("🎬 Video", callback_data="video"),
+            InlineKeyboardButton("🎶 Both", callback_data="both"),
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"{greeting}\n\nWhat would you like to listen to?",
-        reply_markup=reply_markup
+        f"{greeting}\n\nWhat would you like to listen/watch?",
+        reply_markup=reply_markup,
     )
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     choice = query.data
-    user_preferences[query.from_user.id] = choice
+    user_choices[query.from_user.id] = choice
+
     await query.edit_message_text(
-        text=f"You selected: {choice.upper()} ✅\n\nNow send me a song name 🎵"
+        f"You selected: {choice.upper()}\n\nNow send me the song name 🎶"
     )
 
-async def song_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    choice = user_preferences.get(user_id, "music")
-    query = update.message.text
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    choice = user_choices.get(user_id)
+
+    if not choice:
+        await update.message.reply_text("Please choose an option first using /start")
+        return
+
+    song_name = update.message.text
     await send_typing(context, update.effective_chat.id)
 
-    try:
-        if choice == "music":
-            file_path, title = download_media(query, download_audio=True, download_video=False)
-            await update.message.reply_audio(audio=InputFile(file_path), title=title)
+    # Download with yt-dlp
+    ydl_opts = {
+        "quiet": True,
+        "format": "bestaudio/best" if choice == "music" else "bestvideo+bestaudio/best",
+        "outtmpl": "%(title)s.%(ext)s",
+    }
+    if os.path.exists(COOKIES_FILE):
+        ydl_opts["cookiefile"] = COOKIES_FILE
 
-        elif choice == "video":
-            file_path, title = download_media(query, download_audio=False, download_video=True)
-            await update.message.reply_video(video=InputFile(file_path), caption=title)
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch1:{song_name}", download=True)
+        if "entries" in info:
+            info = info["entries"][0]
+        filename = ydl.prepare_filename(info)
 
-        elif choice == "both":
-            audio_path, title = download_media(query, download_audio=True, download_video=False)
-            video_path, _ = download_media(query, download_audio=False, download_video=True)
-            await update.message.reply_audio(audio=InputFile(audio_path), title=title)
-            await update.message.reply_video(video=InputFile(video_path), caption=title)
+    if choice in ("music", "both"):
+        await context.bot.send_audio(
+            chat_id=update.effective_chat.id,
+            audio=InputFile(filename),
+            title=info.get("title"),
+        )
 
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+    if choice in ("video", "both"):
+        await context.bot.send_video(
+            chat_id=update.effective_chat.id,
+            video=InputFile(filename),
+            caption=info.get("title"),
+        )
 
-    finally:
-        cleanup_downloads()
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"📊 Monthly active users: {len(monthly_users)}")
+# ---------------------------------------------------------
+# Register handlers
+# ---------------------------------------------------------
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+application.add_handler(MessageHandler(filters.COMMAND, start))
+application.add_handler(
+    MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_message)
+)
+application.add_handler(
+    MessageHandler(filters.TEXT & filters.Entity("bot_command"), start)
+)
+application.add_handler(application.callback_query_handler(button))
 
-# ----------------- ROUTES -----------------
-@app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return {"ok": True}
 
+# ---------------------------------------------------------
+# FastAPI routes
+# ---------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    await application.bot.set_webhook(WEBHOOK_URL)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, song_handler))
+    # Start bot
+    await application.start()
+    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    logger.info("Bot started and webhook set.")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await application.shutdown()
-    await application.stop()
+    if application.running:
+        await application.stop()
+    logger.info("Bot stopped.")
+
+
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return {"ok": True}
+
+
+@app.get("/")
+async def root():
+    return {"status": "Bot is alive ✅"}
