@@ -1,0 +1,5 @@
+python-telegram-bot==20.5
+yt-dlp>=2025.8.1
+fastapi>=0.109.2
+uvicorn>=0.23.2
+requests>=2.31.0
