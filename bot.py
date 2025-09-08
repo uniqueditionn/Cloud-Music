@@ -16,6 +16,7 @@ from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -185,7 +186,7 @@ application.add_handler(CommandHandler("stats", stats))
 application.add_handler(
     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_song_name)
 )
-application.add_handler(application.callback_query_handler(handle_option))
+application.add_handler(CallbackQueryHandler(handle_option))
 
 
 # FastAPI routes
