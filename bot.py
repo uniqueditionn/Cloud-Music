@@ -192,16 +192,16 @@ application.add_handler(CallbackQueryHandler(handle_option))
 # FastAPI routes
 @app.on_event("startup")
 async def startup_event():
-    await application.start()
+    # Set webhook only
     await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-    logger.info("Bot started and webhook set.")
+    logger.info("Bot webhook set.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    if application.running:
-        await application.stop()
-    logger.info("Bot stopped.")
+    # Remove webhook on shutdown
+    await application.bot.delete_webhook()
+    logger.info("Bot webhook removed.")
 
 
 @app.post("/webhook")
