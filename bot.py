@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from datetime import datetime
 
 import yt_dlp
@@ -19,17 +20,13 @@ from telegram.ext import (
     filters,
 )
 
-# ---------------------------------------------------------
 # Logging setup
-# ---------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------
 # Environment variables
-# ---------------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").rstrip("/")
 COOKIES_ENV = os.getenv("YT_COOKIES_FILES")
@@ -40,28 +37,21 @@ if COOKIES_ENV:
     with open(COOKIES_FILE, "w", encoding="utf-8") as f:
         f.write(COOKIES_ENV)
 
-# ---------------------------------------------------------
 # FastAPI app
-# ---------------------------------------------------------
 app = FastAPI()
 
-# ---------------------------------------------------------
 # Telegram application
-# ---------------------------------------------------------
 application = Application.builder().token(BOT_TOKEN).build()
 
-# Track user choices
-user_choices = {}
+# Track monthly users and pending song requests
+monthly_users = set()
+pending_songs = {}  # user_id -> song_name
 
 
-# ---------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------
 def get_greeting(username: str) -> str:
-    """Return time-based greeting with username"""
-    hour = datetime.utcnow().hour + 5.5  # IST (UTC+5:30)
+    hour = datetime.utcnow().hour + 5.5  # IST
     hour = int(hour % 24)
-
     if 5 <= hour < 12:
         greeting = "🌅 Good Morning"
     elif 12 <= hour < 17:
@@ -70,21 +60,30 @@ def get_greeting(username: str) -> str:
         greeting = "🌇 Good Evening"
     else:
         greeting = "🌙 Good Night"
-
     return f"{greeting}, @{username}!"
 
 
 async def send_typing(ctx: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    """Send typing action"""
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
 
-# ---------------------------------------------------------
 # Handlers
-# ---------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    monthly_users.add(user_id)
+
     username = update.effective_user.username or update.effective_user.first_name
     greeting = get_greeting(username)
+
+    await update.message.reply_text(
+        f"{greeting}\n\nSend me the name of the song you want 🎶"
+    )
+
+
+async def handle_song_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    song_name = update.message.text
+    pending_songs[user_id] = song_name
 
     keyboard = [
         [
@@ -96,85 +95,102 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
-        f"{greeting}\n\nWhat would you like to listen/watch?",
-        reply_markup=reply_markup,
+        f"Select what to receive for *{song_name}*:", reply_markup=reply_markup
     )
 
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     choice = query.data
-    user_choices[query.from_user.id] = choice
+    user_id = query.from_user.id
+    song_name = pending_songs.get(user_id)
 
-    await query.edit_message_text(
-        f"You selected: {choice.upper()}\n\nNow send me the song name 🎶"
-    )
-
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    choice = user_choices.get(user_id)
-
-    if not choice:
-        await update.message.reply_text("Please choose an option first using /start")
+    if not song_name:
+        await query.edit_message_text("❌ No song found. Please send song name first.")
         return
 
-    song_name = update.message.text
-    await send_typing(context, update.effective_chat.id)
+    await query.edit_message_text(f"⏳ Downloading {choice} for *{song_name}*...")
+    await send_typing(context, query.message.chat.id)
 
-    # Download with yt-dlp
-    ydl_opts = {
-        "quiet": True,
-        "format": "bestaudio/best" if choice == "music" else "bestvideo+bestaudio/best",
-        "outtmpl": "%(title)s.%(ext)s",
-    }
+    # yt-dlp options
+    if choice == "music":
+        ydl_opts = {
+            "quiet": True,
+            "format": "bestaudio[ext=m4a]/bestaudio",
+            "outtmpl": "%(title)s.%(ext)s",
+        }
+    elif choice == "video":
+        ydl_opts = {
+            "quiet": True,
+            "format": "bestvideo[height<=720]+bestaudio/best",
+            "outtmpl": "%(title)s.%(ext)s",
+        }
+    else:
+        ydl_opts = {
+            "quiet": True,
+            "format": "bestvideo[height<=720]+bestaudio/best",
+            "outtmpl": "%(title)s.%(ext)s",
+        }
+
     if os.path.exists(COOKIES_FILE):
         ydl_opts["cookiefile"] = COOKIES_FILE
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{song_name}", download=True)
-        if "entries" in info:
-            info = info["entries"][0]
-        filename = ydl.prepare_filename(info)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{song_name}", download=True)
+            if "entries" in info:
+                info = info["entries"][0]
+            filename = ydl.prepare_filename(info)
 
-    if choice in ("music", "both"):
-        await context.bot.send_audio(
-            chat_id=update.effective_chat.id,
-            audio=InputFile(filename),
-            title=info.get("title"),
-        )
+        chat_id = query.message.chat.id
 
-    if choice in ("video", "both"):
-        await context.bot.send_video(
-            chat_id=update.effective_chat.id,
-            video=InputFile(filename),
-            caption=info.get("title"),
-        )
+        if choice in ("music", "both"):
+            await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=InputFile(filename),
+                title=info.get("title"),
+            )
+
+        if choice in ("video", "both"):
+            await context.bot.send_video(
+                chat_id=chat_id,
+                video=InputFile(filename),
+                caption=info.get("title"),
+            )
+
+        await query.message.reply_text(f"✅ Delivered: {info.get('title')}")
+
+        # Clean up
+        if os.path.exists(filename):
+            os.remove(filename)
+
+        # Clear pending
+        pending_songs.pop(user_id, None)
+
+    except Exception as e:
+        logger.error(f"Error downloading {song_name}: {e}")
+        await query.message.reply_text("❌ Failed to fetch the song. Please try again.")
 
 
-# ---------------------------------------------------------
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"📊 Monthly active users: {len(monthly_users)}"
+    )
+
+
 # Register handlers
-# ---------------------------------------------------------
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-application.add_handler(MessageHandler(filters.COMMAND, start))
+application.add_handler(CommandHandler("stats", stats))
 application.add_handler(
-    MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_message)
+    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_song_name)
 )
-application.add_handler(
-    MessageHandler(filters.TEXT & filters.Entity("bot_command"), start)
-)
-application.add_handler(application.callback_query_handler(button))
+application.add_handler(application.callback_query_handler(handle_option))
 
 
-# ---------------------------------------------------------
 # FastAPI routes
-# ---------------------------------------------------------
 @app.on_event("startup")
 async def startup_event():
-    # Start bot
     await application.start()
     await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
     logger.info("Bot started and webhook set.")
