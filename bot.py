@@ -119,24 +119,34 @@ async def handle_option(update: Update):
     )
     await send_typing(query.message.chat.id)
 
-    # yt-dlp options
+    # yt-dlp options for Telegram playable media
     if choice == "music":
         ydl_opts = {
             "quiet": True,
-            "format": "bestaudio[ext=m4a]/bestaudio",
+            "format": "bestaudio[ext=m4a]/bestaudio/best",
             "outtmpl": "%(title)s.%(ext)s",
+            "restrictfilenames": True,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
         }
     elif choice == "video":
         ydl_opts = {
             "quiet": True,
-            "format": "bestvideo[height<=720]+bestaudio/best",
+            "format": "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4]",
             "outtmpl": "%(title)s.%(ext)s",
+            "merge_output_format": "mp4",
+            "restrictfilenames": True,
         }
     else:
         ydl_opts = {
             "quiet": True,
-            "format": "bestvideo[height<=720]+bestaudio/best",
+            "format": "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[ext=mp4]",
             "outtmpl": "%(title)s.%(ext)s",
+            "merge_output_format": "mp4",
+            "restrictfilenames": True,
         }
 
     if os.path.exists(COOKIES_FILE):
@@ -205,20 +215,17 @@ async def telegram_webhook(request: Request):
     except Exception as e:
         logger.error(f"Error processing update: {e}")
 
-    # Respond quickly to Telegram
     return {"ok": True}
 
 
 @app.on_event("startup")
 async def startup_event():
-    # Set webhook
     await bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
     logger.info("Webhook set.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Remove webhook
     await bot.delete_webhook()
     logger.info("Webhook removed.")
 
