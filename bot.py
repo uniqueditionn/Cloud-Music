@@ -17,6 +17,13 @@ from telegram.ext import (
 # ----------------- CONFIG -----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Example: https://your-app.onrender.com/webhook
+COOKIES_ENV = os.getenv("YT_COOKIES_FILES")  # Your cookies stored in ENV
+COOKIES_FILE = "cookies.txt"
+
+# Write cookies.txt from ENV if available
+if COOKIES_ENV:
+    with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+        f.write(COOKIES_ENV)
 
 # Create downloads folder
 DOWNLOAD_DIR = "downloads"
@@ -60,7 +67,7 @@ def download_media(query: str, download_audio=True, download_video=False):
         "noplaylist": True,
         "writesubtitles": False,
         "writethumbnail": True,
-        "cookiefile": "cookies.txt",   # 👈 use cookies for restricted videos
+        "cookiefile": COOKIES_FILE if os.path.exists(COOKIES_FILE) else None,
         "postprocessors": []
     }
 

@@ -24,7 +24,7 @@ downloads/
 *.jpg
 *.png
 
-# yt-dlp cookies
+# yt-dlp cookies (created dynamically from ENV)
 cookies.txt
 
 # Logs
