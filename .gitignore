@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Downloads
+downloads/
+*.mp3
+*.mp4
+*.webm
+*.m4a
+*.jpg
+*.png
+
+# yt-dlp cookies
+cookies.txt
+
+# Logs
+*.log

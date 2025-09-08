@@ -1,5 +1,6 @@
 import os
 import logging
+import shutil
 from datetime import datetime
 import yt_dlp
 
@@ -17,6 +18,10 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Example: https://your-app.onrender.com/webhook
 
+# Create downloads folder
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
 # ----------------- LOGGING -----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,7 +36,7 @@ monthly_users = set()
 
 # ----------------- HELPERS -----------------
 def get_greeting(username: str, first_name: str) -> str:
-    hour = datetime.utcnow().hour + 5.5  # IST offset
+    hour = (datetime.utcnow().hour + 5) % 24  # adjust for IST offset
     if hour < 12:
         greet = "Good Morning"
     elif hour < 17:
@@ -50,11 +55,12 @@ async def send_typing(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 def download_media(query: str, download_audio=True, download_video=False):
     ydl_opts = {
         "format": "bestaudio/best" if download_audio else "best",
-        "outtmpl": "%(id)s.%(ext)s",
+        "outtmpl": os.path.join(DOWNLOAD_DIR, "%(id)s.%(ext)s"),
         "quiet": True,
         "noplaylist": True,
         "writesubtitles": False,
         "writethumbnail": True,
+        "cookiefile": "cookies.txt",   # 👈 use cookies for restricted videos
         "postprocessors": []
     }
 
@@ -64,16 +70,23 @@ def download_media(query: str, download_audio=True, download_video=False):
             "preferredcodec": "mp3",
             "preferredquality": "192",
         })
-        ydl_opts["postprocessors"].append({
-            "key": "EmbedThumbnail"
-        })
+        ydl_opts["postprocessors"].append({"key": "EmbedThumbnail"})
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-        file_path = ydl.prepare_filename(info["entries"][0])
+        entry = info["entries"][0]
+        file_path = ydl.prepare_filename(entry)
         if download_audio:
             file_path = file_path.rsplit(".", 1)[0] + ".mp3"
-        return file_path, info["entries"][0]["title"]
+        return file_path, entry["title"]
+
+def cleanup_downloads():
+    """Remove all files from downloads folder."""
+    try:
+        shutil.rmtree(DOWNLOAD_DIR)
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Cleanup failed: {e}")
 
 # ----------------- HANDLERS -----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,19 +123,26 @@ async def song_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await send_typing(context, update.effective_chat.id)
 
-    if choice == "music":
-        file_path, title = download_media(query, download_audio=True, download_video=False)
-        await update.message.reply_audio(audio=InputFile(file_path), title=title)
+    try:
+        if choice == "music":
+            file_path, title = download_media(query, download_audio=True, download_video=False)
+            await update.message.reply_audio(audio=InputFile(file_path), title=title)
 
-    elif choice == "video":
-        file_path, title = download_media(query, download_audio=False, download_video=True)
-        await update.message.reply_video(video=InputFile(file_path), caption=title)
+        elif choice == "video":
+            file_path, title = download_media(query, download_audio=False, download_video=True)
+            await update.message.reply_video(video=InputFile(file_path), caption=title)
 
-    elif choice == "both":
-        audio_path, title = download_media(query, download_audio=True, download_video=False)
-        video_path, _ = download_media(query, download_audio=False, download_video=True)
-        await update.message.reply_audio(audio=InputFile(audio_path), title=title)
-        await update.message.reply_video(video=InputFile(video_path), caption=title)
+        elif choice == "both":
+            audio_path, title = download_media(query, download_audio=True, download_video=False)
+            video_path, _ = download_media(query, download_audio=False, download_video=True)
+            await update.message.reply_audio(audio=InputFile(audio_path), title=title)
+            await update.message.reply_video(video=InputFile(video_path), caption=title)
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+    finally:
+        cleanup_downloads()
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📊 Monthly active users: {len(monthly_users)}")
